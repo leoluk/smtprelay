@@ -2,36 +2,16 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"os"
 	"strings"
-
-	"golang.org/x/crypto/bcrypt"
-)
-
-var (
-	filename string
 )
 
 type AuthUser struct {
 	username         string
-	passwordHash     string
+	token            string
 	allowedAddresses []string
-}
-
-func AuthLoadFile(file string) error {
-	f, err := os.Open(file)
-	if err != nil {
-		return err
-	}
-	f.Close()
-
-	filename = file
-	return nil
-}
-
-func AuthReady() bool {
-	return (filename != "")
 }
 
 // Split a string and ignore empty results
@@ -49,7 +29,7 @@ func parseLine(line string) *AuthUser {
 
 	user := AuthUser{
 		username:         parts[0],
-		passwordHash:     parts[1],
+		token:            parts[1],
 		allowedAddresses: nil,
 	}
 
@@ -61,17 +41,12 @@ func parseLine(line string) *AuthUser {
 }
 
 func AuthFetch(username string) (*AuthUser, error) {
-	if !AuthReady() {
-		return nil, errors.New("Authentication file not specified. Call LoadFile() first")
+	data := os.Getenv("SMTPRELAY_USERS")
+	if data == "" {
+		return nil, errors.New("SMTPRELAY_USERS is unspecified")
 	}
 
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(bytes.NewBufferString(data))
 	for scanner.Scan() {
 		user := parseLine(scanner.Text())
 		if user == nil {
@@ -93,7 +68,7 @@ func AuthCheckPassword(username string, secret string) error {
 	if err != nil {
 		return err
 	}
-	if bcrypt.CompareHashAndPassword([]byte(user.passwordHash), []byte(secret)) == nil {
+	if user.token == secret {
 		return nil
 	}
 	return errors.New("Password invalid")

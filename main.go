@@ -87,12 +87,12 @@ func addrAllowed(addr string, allowedAddrs []string) bool {
 
 func senderChecker(peer smtpd.Peer, addr string) error {
 	// check sender address from auth file if user is authenticated
-	if *allowedUsers != "" && peer.Username != "" {
+	if true /* always check auth file */ {
 		user, err := AuthFetch(peer.Username)
 		if err != nil {
 			// Shouldn't happen: authChecker already validated username+password
 			log.WithFields(logrus.Fields{
-				"peer": peer.Addr,
+				"peer":     peer.Addr,
 				"username": peer.Username,
 			}).WithError(err).Warn("could not fetch auth user")
 			return smtpd.Error{Code: 451, Message: "Bad sender address"}
@@ -100,8 +100,8 @@ func senderChecker(peer smtpd.Peer, addr string) error {
 
 		if !addrAllowed(addr, user.allowedAddresses) {
 			log.WithFields(logrus.Fields{
-				"peer": peer.Addr,
-				"username": peer.Username,
+				"peer":           peer.Addr,
+				"username":       peer.Username,
 				"sender_address": addr,
 			}).Warn("sender address not allowed for authenticated user")
 			return smtpd.Error{Code: 451, Message: "Bad sender address"}
@@ -126,7 +126,7 @@ func senderChecker(peer smtpd.Peer, addr string) error {
 
 	log.WithFields(logrus.Fields{
 		"sender_address": addr,
-		"peer": peer.Addr,
+		"peer":           peer.Addr,
 	}).Warn("Sender address not allowed by allowed_sender pattern")
 	return smtpd.Error{Code: 451, Message: "Bad sender address"}
 }
@@ -149,7 +149,7 @@ func recipientChecker(peer smtpd.Peer, addr string) error {
 	}
 
 	log.WithFields(logrus.Fields{
-		"peer": peer.Addr,
+		"peer":              peer.Addr,
 		"recipient_address": addr,
 	}).Warn("recipient address not allowed by allowed_recipients pattern")
 	return smtpd.Error{Code: 451, Message: "Bad recipient address"}
@@ -159,7 +159,7 @@ func authChecker(peer smtpd.Peer, username string, password string) error {
 	err := AuthCheckPassword(username, password)
 	if err != nil {
 		log.WithFields(logrus.Fields{
-			"peer": peer.Addr,
+			"peer":     peer.Addr,
 			"username": username,
 		}).WithError(err).Warn("auth error")
 		return smtpd.Error{Code: 535, Message: "Authentication credentials invalid"}
@@ -175,7 +175,7 @@ func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 
 	logger := log.WithFields(logrus.Fields{
 		"from": env.Sender,
-		"to": env.Recipients,
+		"to":   env.Recipients,
 		"peer": peerIP,
 		"host": *remoteHost,
 		"uuid": generateUUID(),
@@ -223,7 +223,7 @@ func mailHandler(peer smtpd.Peer, env smtpd.Envelope) error {
 
 			logger.WithFields(logrus.Fields{
 				"err_code": err.Code,
-				"err_msg": err.Msg,
+				"err_msg":  err.Msg,
 			}).Error("delivery failed")
 		default:
 			smtpError = smtpd.Error{Code: 554, Message: "Forwarding failed"}
@@ -269,14 +269,16 @@ func getTLSConfig() *tls.Config {
 		tls.TLS_RSA_WITH_AES_256_GCM_SHA384, // does not provide PFS
 	}
 
-	if *localCert == "" || *localKey == "" {
-		log.WithFields(logrus.Fields{
-			"cert_file": *localCert,
-			"key_file": *localKey,
-		}).Fatal("TLS certificate/key file not defined in config")
+	localCert := os.Getenv("SMTPRELAY_TLS_CERT")
+	if localCert == "" {
+		log.Fatal("SMTPRELAY_TLS_CERT is unspecified")
+	}
+	localKey := os.Getenv("SMTPRELAY_TLS_KEY")
+	if localKey == "" {
+		log.Fatal("SMTPRELAY_TLS_KEY is unspecified")
 	}
 
-	cert, err := tls.LoadX509KeyPair(*localCert, *localKey)
+	cert, err := tls.X509KeyPair([]byte(localCert), []byte(localKey))
 	if err != nil {
 		log.WithField("error", err).
 			Fatal("cannot load X509 keypair")
@@ -301,17 +303,6 @@ func main() {
 	log.WithField("version", appVersion).
 		Debug("starting smtprelay")
 
-	// Load allowed users file
-	if *allowedUsers != "" {
-		err := AuthLoadFile(*allowedUsers)
-		if err != nil {
-			log.WithField("file", *allowedUsers).
-				WithError(err).
-				Fatal("cannot load allowed users file")
-		}
-	}
-
-	// Create a server for each desired listen address
 	for _, listenAddr := range strings.Split(*listen, " ") {
 		server := &smtpd.Server{
 			Hostname:          *hostName,
@@ -322,9 +313,7 @@ func main() {
 			Handler:           mailHandler,
 		}
 
-		if *allowedUsers != "" {
-			server.Authenticator = authChecker
-		}
+		server.Authenticator = authChecker
 
 		var lsnr net.Listener
 		var err error
